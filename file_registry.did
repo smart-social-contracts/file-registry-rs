@@ -1,0 +1,82 @@
+// File Registry — drop-in replacement for the Python file_registry canister.
+// All registry methods take/return JSON-encoded text, matching the original
+// contract. HTTP serving uses the certified asset canister types so GETs are
+// certified query responses.
+
+type HeaderField = record { text; text };
+
+type HttpRequest = record {
+  method : text;
+  url : text;
+  headers : vec HeaderField;
+  body : blob;
+  certificate_version : opt nat16;
+};
+
+type HttpResponse = record {
+  status_code : nat16;
+  headers : vec HeaderField;
+  body : blob;
+  streaming_strategy : opt StreamingStrategy;
+  upgrade : opt bool;
+};
+
+type StreamingCallbackToken = record {
+  key : text;
+  content_encoding : text;
+  index : nat;
+  sha256 : opt blob;
+};
+
+type StreamingCallbackHttpResponse = record {
+  body : blob;
+  token : opt StreamingCallbackToken;
+};
+
+type StreamingStrategy = variant {
+  Callback : record {
+    callback : func (StreamingCallbackToken) -> (opt StreamingCallbackHttpResponse) query;
+    token : StreamingCallbackToken;
+  };
+};
+
+service : {
+  // -- reads ---------------------------------------------------------------
+  list_namespaces : () -> (text) query;
+  list_files : (text) -> (text) query;
+  get_file : (text) -> (text) query;
+  get_file_size : (text) -> (text) query;
+  get_file_chunk : (text) -> (text) query;
+  get_file_chunk_icc : (text, text, text, text) -> (text) query;
+  get_file_size_icc : (text, text) -> (text) query;
+  list_files_icc : (text) -> (text) query;
+  get_stats : () -> (text) query;
+  get_acl : () -> (text) query;
+  list_extensions : () -> (text) query;
+  list_codices : () -> (text) query;
+  latest_version : (text) -> (text) query;
+  get_extension_manifest : (text) -> (text) query;
+  get_backend_files : (text) -> (text) query;
+  get_backend_files_icc : (text, text, text) -> (text) query;
+  get_frontend_files : (text) -> (text) query;
+  get_frontend_files_icc : (text, text) -> (text) query;
+
+  // -- writes ----------------------------------------------------------------
+  store_file : (text) -> (text);
+  delete_file : (text) -> (text);
+  update_namespace : (text) -> (text);
+  publish_namespace : (text) -> (text);
+  delete_namespace : (text) -> (text);
+  purge_old_versions : (text) -> (text);
+  grant_publish : (text) -> (text);
+  revoke_publish : (text) -> (text);
+  store_file_chunk : (text) -> (text);
+  finalize_chunked_file : (text) -> (text);
+  finalize_chunked_file_step : (text) -> (text);
+
+  // -- http ------------------------------------------------------------------
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  http_request_streaming_callback : (StreamingCallbackToken) -> (StreamingCallbackHttpResponse) query;
+
+  __get_candid_interface_tmp_hack : () -> (text) query;
+}

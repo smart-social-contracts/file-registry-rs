@@ -1,0 +1,21 @@
+{
+  "canisters": {
+    "file_registry": {
+      "type": "custom",
+      "candid": "file_registry.did",
+      "wasm": "out/file_registry.wasm.gz",
+      "build": "bash scripts/build.sh",
+      "metadata": [
+        {
+          "name": "candid:service"
+        }
+      ]
+    }
+  },
+  "defaults": {
+    "build": {
+      "packtool": ""
+    }
+  },
+  "version": 1
+}
