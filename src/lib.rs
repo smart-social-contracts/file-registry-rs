@@ -226,6 +226,11 @@ fn revoke_publish(args: String) -> String {
 }
 
 #[update]
+fn admin_restore_files(args: String) -> String {
+    with_reg_mut(|reg| api::u_admin_restore_files(reg, &mut CertifiedStore, &ctx(), &args))
+}
+
+#[update]
 fn store_file_chunk(args: String) -> String {
     with_reg_mut(|reg| api::u_store_file_chunk(reg, &ctx(), &args))
 }

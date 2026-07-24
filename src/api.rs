@@ -1135,6 +1135,116 @@ pub fn u_finalize_chunked_file_step(
 }
 
 // ---------------------------------------------------------------------------
+// Bulk restore (migration tooling)
+// ---------------------------------------------------------------------------
+
+/// Controller-only bulk restore used when migrating content between registry
+/// canisters (e.g. the Python -> Rust cutover). Restores many files of one
+/// namespace in a single message, preserving original metadata.
+///
+/// Args (JSON): {
+///   "namespace": str,
+///   "publish": bool (optional) — mark the namespace published,
+///   "description": str (optional),
+///   "files": [{"path", "content_b64", "content_type"?, "sha256"?, "updated"?}]
+/// }
+pub fn u_admin_restore_files(
+    reg: &mut Registry,
+    store: &mut dyn BlobStore,
+    ctx: &CallerCtx,
+    args: &str,
+) -> String {
+    if let Some(e) = require_controller(ctx) {
+        return e;
+    }
+    let params = match parse_args(args) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    let namespace = match str_field(&params, "namespace") {
+        Ok(v) => v.to_string(),
+        Err(e) => return err(e),
+    };
+    let files = params
+        .get("files")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    reg.ensure_namespace(&namespace, &ctx.caller, ctx.now);
+
+    let mut restored = 0usize;
+    for file in &files {
+        let path = match file.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p.trim_start_matches('/').to_string(),
+            None => return err("file entry missing 'path'"),
+        };
+        let content_b64 = match file.get("content_b64").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => return err(format!("file '{path}' missing 'content_b64'")),
+        };
+        let content = match base64::engine::general_purpose::STANDARD.decode(content_b64) {
+            Ok(c) => c,
+            Err(e) => return err(format!("file '{path}': invalid base64: {e}")),
+        };
+        let actual_sha = sha256_hex(&[&content]);
+        if let Some(expected) = file.get("sha256").and_then(|v| v.as_str()) {
+            if !expected.is_empty() && expected != actual_sha {
+                return err(format!(
+                    "file '{path}': sha256 mismatch: expected {expected}, got {actual_sha}"
+                ));
+            }
+        }
+        let content_type = file
+            .get("content_type")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| guess_content_type(&path));
+        let updated = file
+            .get("updated")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(ctx.now);
+
+        let size = content.len() as u64;
+        if let Err(e) = store.put_chunked(
+            &asset_key(&namespace, &path),
+            &content_type,
+            Some(FILE_MAX_AGE_SECS),
+            vec![content],
+        ) {
+            return err(format!("file '{path}': {e}"));
+        }
+        reg.set_file_meta(
+            &namespace,
+            &path,
+            FileMeta {
+                size,
+                content_type,
+                sha256: actual_sha,
+                updated,
+            },
+        );
+        restored += 1;
+    }
+
+    if let Some(description) = params.get("description").and_then(|v| v.as_str()) {
+        if let Some(info) = reg.namespaces.get_mut(&namespace) {
+            info.description = description.to_string();
+        }
+    }
+    if params.get("publish").and_then(|v| v.as_bool()) == Some(true) {
+        if let Some(info) = reg.namespaces.get_mut(&namespace) {
+            info.published = true;
+            info.published_at = Some(ctx.now);
+        }
+    }
+
+    refresh_indexes(reg, store, Some(&namespace));
+    json!({"ok": true, "namespace": namespace, "restored": restored}).to_string()
+}
+
+// ---------------------------------------------------------------------------
 // Purge
 // ---------------------------------------------------------------------------
 

@@ -710,6 +710,77 @@ fn purge_old_versions_lifecycle() {
 }
 
 #[test]
+fn admin_restore_bulk() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+
+    // Non-controller refused.
+    let res = v(&u_admin_restore_files(
+        &mut reg,
+        &mut store,
+        &user("alice"),
+        &json!({"namespace": "ext/x/1.0.0", "files": []}).to_string(),
+    ));
+    assert!(res["error"].as_str().unwrap().contains("not a controller"));
+
+    // Controller restores two files with preserved metadata + publish flag.
+    use sha2::Digest;
+    let sha_a = hex::encode(sha2::Sha256::digest(b"content a"));
+    let args = json!({
+        "namespace": "ext/x/1.0.0",
+        "publish": true,
+        "description": "restored",
+        "files": [
+            {"path": "manifest.json", "content_b64": b64(br#"{"name":"x"}"#),
+             "content_type": "application/json", "updated": 12345},
+            {"path": "backend/a.py", "content_b64": b64(b"content a"), "sha256": sha_a},
+        ],
+    })
+    .to_string();
+    let res = v(&u_admin_restore_files(
+        &mut reg,
+        &mut store,
+        &controller(),
+        &args,
+    ));
+    assert_eq!(res["ok"], true, "{res}");
+    assert_eq!(res["restored"], 2);
+
+    // Metadata round-trips (original updated timestamp preserved).
+    let files = v(&q_list_files(
+        &reg,
+        &json!({"namespace": "ext/x/1.0.0"}).to_string(),
+    ));
+    let manifest = files
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "manifest.json")
+        .unwrap();
+    assert_eq!(manifest["updated"], 12345);
+
+    // Published and visible in catalogs, content readable.
+    let exts = v(&list_extensions_json(&reg, &store));
+    assert_eq!(exts[0]["ext_id"], "x");
+    assert_eq!(
+        store.read("/ext/x/1.0.0/backend/a.py").unwrap(),
+        b"content a"
+    );
+
+    // sha mismatch rejected.
+    let res = v(&u_admin_restore_files(
+        &mut reg,
+        &mut store,
+        &controller(),
+        &json!({"namespace": "ext/x/1.0.0", "files": [
+            {"path": "bad.bin", "content_b64": b64(b"zzz"), "sha256": "00"}
+        ]})
+        .to_string(),
+    ));
+    assert!(res["error"].as_str().unwrap().contains("sha256 mismatch"));
+}
+
+#[test]
 fn update_namespace_description() {
     let mut reg = Registry::default();
     let mut store = MemStore::default();

@@ -71,6 +71,7 @@ service : {
   grant_publish : (text) -> (text);
   revoke_publish : (text) -> (text);
   store_file_chunk : (text) -> (text);
+  admin_restore_files : (text) -> (text);
   finalize_chunked_file : (text) -> (text);
   finalize_chunked_file_step : (text) -> (text);
 
