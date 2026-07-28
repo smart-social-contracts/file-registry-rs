@@ -307,6 +307,9 @@ fn canister_post_upgrade() {
         from_reader_ignore_trailing_data(reader).expect("failed to deserialize stable state");
     ic_certified_assets::post_upgrade(stable.assets, None);
     REGISTRY.with(|r| r.replace(stable.registry));
+    // The index assets were rendered by the previous build, so an upgrade that
+    // changes their shape leaves HTTP serving stale until the next write.
+    with_reg_mut(|reg| api::refresh_indexes(reg, &mut CertifiedStore, None));
 }
 
 fn from_reader_ignore_trailing_data<T, R>(reader: R) -> Result<T, serde_cbor::Error>
