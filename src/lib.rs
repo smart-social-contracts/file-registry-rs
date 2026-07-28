@@ -146,6 +146,16 @@ fn get_extension_manifest(args: String) -> String {
 }
 
 #[query]
+fn get_namespace_approval(args: String) -> String {
+    with_reg(|reg| api::q_get_namespace_approval(reg, &args))
+}
+
+#[query]
+fn get_namespace_approval_icc(namespace: String) -> String {
+    with_reg(|reg| api::get_namespace_approval_impl(reg, &namespace))
+}
+
+#[query]
 fn get_backend_files(args: String) -> String {
     let params: serde_json::Value = match serde_json::from_str(&args) {
         Ok(p) => p,
@@ -223,6 +233,11 @@ fn grant_publish(args: String) -> String {
 #[update]
 fn revoke_publish(args: String) -> String {
     with_reg_mut(|reg| api::u_revoke_publish(reg, &ctx(), &args))
+}
+
+#[update]
+fn set_namespace_approval(args: String) -> String {
+    with_reg_mut(|reg| api::u_set_namespace_approval(reg, &mut CertifiedStore, &ctx(), &args))
 }
 
 #[update]

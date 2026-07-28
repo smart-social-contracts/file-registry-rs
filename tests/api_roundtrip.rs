@@ -804,3 +804,424 @@ fn update_namespace_description() {
     ));
     assert!(res["error"].as_str().unwrap().contains("not found"));
 }
+
+// ---------------------------------------------------------------------------
+// Approval
+// ---------------------------------------------------------------------------
+
+fn approve(reg: &mut Registry, store: &mut MemStore, ctx: &CallerCtx, ns: &str) -> Value {
+    v(&u_set_namespace_approval(
+        reg,
+        store,
+        ctx,
+        &json!({"namespace": ns, "notes": "reviewed"}).to_string(),
+    ))
+}
+
+fn approval_of(reg: &Registry, ns: &str) -> Value {
+    v(&get_namespace_approval_impl(reg, ns))
+}
+
+#[test]
+fn namespace_starts_unapproved() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    store_small(
+        &mut reg,
+        &mut store,
+        &user("alice"),
+        "ext/a/1.0.0",
+        "f.js",
+        b"x",
+    );
+
+    let approval = approval_of(&reg, "ext/a/1.0.0");
+    assert_eq!(approval["approved"], false);
+    assert_eq!(approval["status"], "unapproved");
+
+    let missing = approval_of(&reg, "ext/nope/1.0.0");
+    assert!(missing["error"].as_str().unwrap().contains("not found"));
+}
+
+#[test]
+fn publishing_a_package_does_not_approve_it() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let alice = user("alice");
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "f.js", b"x");
+    publish(&mut reg, &mut store, &alice, "ext/a/1.0.0");
+
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], false);
+}
+
+#[test]
+fn approving_requires_approver_rights_not_publisher_rights() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let alice = user("alice");
+    // alice owns the namespace: she can publish to it, but that must not let
+    // her approve her own package.
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "f.js", b"x");
+
+    let denied = approve(&mut reg, &mut store, &alice, "ext/a/1.0.0");
+    assert!(denied["error"]
+        .as_str()
+        .unwrap()
+        .contains("requires approver rights"));
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], false);
+
+    // The marketplace canister gets in via the _approvers ACL.
+    let marketplace = user("marketplace-canister");
+    u_grant_publish(
+        &mut reg,
+        &controller(),
+        &json!({"namespace": "_approvers", "principal": "marketplace-canister"}).to_string(),
+    );
+    let ok = approve(&mut reg, &mut store, &marketplace, "ext/a/1.0.0");
+    assert_eq!(ok["ok"], true);
+    assert_eq!(ok["status"], "approved");
+
+    let approval = approval_of(&reg, "ext/a/1.0.0");
+    assert_eq!(approval["approved"], true);
+    assert_eq!(approval["approver"], "marketplace-canister");
+    assert_eq!(approval["notes"], "reviewed");
+    assert_eq!(approval["content_matches"], true);
+    assert_eq!(approval["file_count"], 1);
+}
+
+#[test]
+fn controller_can_approve() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    store_small(
+        &mut reg,
+        &mut store,
+        &user("alice"),
+        "ext/a/1.0.0",
+        "f.js",
+        b"x",
+    );
+
+    assert_eq!(
+        approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0")["ok"],
+        true
+    );
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], true);
+}
+
+#[test]
+fn rejected_status_is_recorded_but_not_approved() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    store_small(
+        &mut reg,
+        &mut store,
+        &user("alice"),
+        "ext/a/1.0.0",
+        "f.js",
+        b"x",
+    );
+
+    let res = v(&u_set_namespace_approval(
+        &mut reg,
+        &mut store,
+        &controller(),
+        &json!({"namespace": "ext/a/1.0.0", "status": "rejected", "notes": "imports core.*"})
+            .to_string(),
+    ));
+    assert_eq!(res["ok"], true);
+
+    let approval = approval_of(&reg, "ext/a/1.0.0");
+    assert_eq!(approval["approved"], false);
+    assert_eq!(approval["status"], "rejected");
+    assert_eq!(approval["notes"], "imports core.*");
+}
+
+#[test]
+fn approval_rejects_unknown_status_and_missing_namespace() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    store_small(
+        &mut reg,
+        &mut store,
+        &user("alice"),
+        "ext/a/1.0.0",
+        "f.js",
+        b"x",
+    );
+
+    let bad = v(&u_set_namespace_approval(
+        &mut reg,
+        &mut store,
+        &controller(),
+        &json!({"namespace": "ext/a/1.0.0", "status": "maybe"}).to_string(),
+    ));
+    assert!(bad["error"].as_str().unwrap().contains("status must be"));
+
+    let missing = approve(&mut reg, &mut store, &controller(), "ext/nope/1.0.0");
+    assert!(missing["error"].as_str().unwrap().contains("not found"));
+}
+
+#[test]
+fn cannot_approve_a_namespace_with_no_files() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    reg.ensure_namespace("ext/a/1.0.0", "alice", 1);
+
+    let res = approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+    assert!(res["error"]
+        .as_str()
+        .unwrap()
+        .contains("no files to approve"));
+}
+
+#[test]
+fn adding_a_file_invalidates_approval() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let alice = user("alice");
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "f.js", b"x");
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], true);
+
+    store_small(
+        &mut reg,
+        &mut store,
+        &alice,
+        "ext/a/1.0.0",
+        "evil.js",
+        b"pwn",
+    );
+
+    let approval = approval_of(&reg, "ext/a/1.0.0");
+    assert_eq!(approval["approved"], false);
+    assert_eq!(approval["status"], "unapproved");
+}
+
+#[test]
+fn overwriting_a_file_invalidates_approval() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let alice = user("alice");
+    store_small(
+        &mut reg,
+        &mut store,
+        &alice,
+        "ext/a/1.0.0",
+        "f.js",
+        b"benign",
+    );
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+
+    // The attack the hash binding exists to stop: approve, then swap bytes.
+    store_small(
+        &mut reg,
+        &mut store,
+        &alice,
+        "ext/a/1.0.0",
+        "f.js",
+        b"malicious",
+    );
+
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], false);
+}
+
+#[test]
+fn deleting_a_file_invalidates_approval() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let alice = user("alice");
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "f.js", b"x");
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "g.js", b"y");
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+
+    let res = v(&u_delete_file(
+        &mut reg,
+        &mut store,
+        &alice,
+        &json!({"namespace": "ext/a/1.0.0", "path": "g.js"}).to_string(),
+    ));
+    assert_eq!(res["ok"], true);
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], false);
+}
+
+#[test]
+fn chunked_upload_invalidates_approval() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let alice = user("alice");
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "f.js", b"x");
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+
+    u_store_file_chunk(
+        &mut reg,
+        &alice,
+        json!({
+            "namespace": "ext/a/1.0.0",
+            "path": "big.js",
+            "chunk_index": 0,
+            "total_chunks": 1,
+            "data_b64": b64(b"big content"),
+        })
+        .to_string()
+        .as_str(),
+    );
+    let res = v(&u_finalize_chunked_file(
+        &mut reg,
+        &mut store,
+        &alice,
+        &json!({"namespace": "ext/a/1.0.0", "path": "big.js"}).to_string(),
+    ));
+    assert_eq!(res["ok"], true);
+
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], false);
+}
+
+#[test]
+fn admin_restore_invalidates_approval() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    store_small(
+        &mut reg,
+        &mut store,
+        &user("alice"),
+        "ext/a/1.0.0",
+        "f.js",
+        b"x",
+    );
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+
+    let res = v(&u_admin_restore_files(
+        &mut reg,
+        &mut store,
+        &controller(),
+        &json!({
+            "namespace": "ext/a/1.0.0",
+            "files": [{"path": "f.js", "content_b64": b64(b"restored")}],
+        })
+        .to_string(),
+    ));
+    assert_eq!(res["ok"], true);
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], false);
+}
+
+#[test]
+fn approval_is_scoped_to_its_own_namespace() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let alice = user("alice");
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "f.js", b"x");
+    store_small(&mut reg, &mut store, &alice, "ext/b/1.0.0", "f.js", b"y");
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+
+    // A new version of a different package must not disturb it.
+    store_small(&mut reg, &mut store, &alice, "ext/b/1.0.0", "g.js", b"z");
+
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], true);
+    assert_eq!(approval_of(&reg, "ext/b/1.0.0")["approved"], false);
+}
+
+#[test]
+fn reapproving_after_a_change_restores_approval() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let alice = user("alice");
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "f.js", b"x");
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "f.js", b"x2");
+    assert_eq!(approval_of(&reg, "ext/a/1.0.0")["approved"], false);
+
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+    let approval = approval_of(&reg, "ext/a/1.0.0");
+    assert_eq!(approval["approved"], true);
+    assert_eq!(approval["content_matches"], true);
+}
+
+#[test]
+fn namespace_listing_reports_approval() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let alice = user("alice");
+    store_small(&mut reg, &mut store, &alice, "ext/a/1.0.0", "f.js", b"x");
+    store_small(&mut reg, &mut store, &alice, "ext/b/1.0.0", "f.js", b"y");
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+
+    let listing = v(&list_namespaces_json(&reg));
+    let approved: Vec<&Value> = listing
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["approved"] == true)
+        .collect();
+    assert_eq!(approved.len(), 1);
+    assert_eq!(approved[0]["namespace"], "ext/a/1.0.0");
+}
+
+#[test]
+fn approval_survives_a_state_roundtrip() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    store_small(
+        &mut reg,
+        &mut store,
+        &user("alice"),
+        "ext/a/1.0.0",
+        "f.js",
+        b"x",
+    );
+    approve(&mut reg, &mut store, &controller(), "ext/a/1.0.0");
+
+    // Same path an upgrade takes: CBOR out, CBOR back in.
+    let bytes = serde_cbor::to_vec(&reg).unwrap();
+    let restored: Registry = serde_cbor::from_slice(&bytes).unwrap();
+
+    assert_eq!(approval_of(&restored, "ext/a/1.0.0")["approved"], true);
+}
+
+#[test]
+fn state_written_before_approvals_existed_deserializes_as_unapproved() {
+    // A NamespaceInfo serialized by the pre-approval build has no `approval`
+    // key at all; post_upgrade must read it rather than trap.
+    #[derive(serde::Serialize)]
+    struct OldNamespaceInfo {
+        created: u64,
+        owner: String,
+        description: String,
+        published: bool,
+        published_at: Option<u64>,
+    }
+    #[derive(serde::Serialize)]
+    struct OldRegistry {
+        namespaces: std::collections::BTreeMap<String, OldNamespaceInfo>,
+        files: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
+        acl: std::collections::BTreeMap<String, Vec<String>>,
+        pending: std::collections::BTreeMap<String, Value>,
+    }
+
+    let mut namespaces = std::collections::BTreeMap::new();
+    namespaces.insert(
+        "ext/a/1.0.0".to_string(),
+        OldNamespaceInfo {
+            created: 1,
+            owner: "alice".into(),
+            description: String::new(),
+            published: true,
+            published_at: Some(2),
+        },
+    );
+    let old = OldRegistry {
+        namespaces,
+        files: std::collections::BTreeMap::new(),
+        acl: std::collections::BTreeMap::new(),
+        pending: std::collections::BTreeMap::new(),
+    };
+
+    let bytes = serde_cbor::to_vec(&old).unwrap();
+    let restored: Registry = serde_cbor::from_slice(&bytes).unwrap();
+
+    assert_eq!(
+        approval_of(&restored, "ext/a/1.0.0")["status"],
+        "unapproved"
+    );
+    assert!(restored.namespaces["ext/a/1.0.0"].published);
+}
