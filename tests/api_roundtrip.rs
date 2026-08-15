@@ -246,6 +246,23 @@ fn codex_gate_blocks_uncurated() {
 }
 
 #[test]
+fn empty_wasm_rejected() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let ctx = user("alice");
+
+    for path in ["realm-base-1.0.0.wasm", "realm-base-1.0.0.WASM", "pkg/module.Wasm"] {
+        let res = store_small(&mut reg, &mut store, &ctx, "wasm", path, b"");
+        assert_eq!(res["error"], "empty wasm not allowed", "path={path}");
+    }
+
+    // Empty non-wasm files are still allowed.
+    let res = store_small(&mut reg, &mut store, &ctx, "wasm", "empty.bin", b"");
+    assert_eq!(res["ok"], true);
+    assert_eq!(res["size"], 0);
+}
+
+#[test]
 fn chunked_upload_and_range_reads() {
     let mut reg = Registry::default();
     let mut store = MemStore::default();

@@ -686,6 +686,13 @@ fn write_file(
     let sha256 = sha256_hex(&chunks);
     let size: u64 = chunks.iter().map(|c| c.len() as u64).sum();
 
+    if size == 0 {
+        let filename = path.rsplit('/').next().unwrap_or(path);
+        if filename.len() >= 5 && filename[filename.len() - 5..].eq_ignore_ascii_case(".wasm") {
+            return Err("empty wasm not allowed".into());
+        }
+    }
+
     reg.ensure_namespace(namespace, &ctx.caller, ctx.now);
     store.put_chunked(
         &asset_key(namespace, path),

@@ -119,6 +119,10 @@ impl BlobStore for CertifiedStore {
     ) -> Result<(), String> {
         let ctx = SystemContext::new();
         ic_certified_assets::with_state_mut(|s| {
+            let _ = s.delete_asset(DeleteAssetArguments {
+                key: key.to_string(),
+            });
+
             s.create_asset(CreateAssetArguments {
                 key: key.to_string(),
                 content_type: content_type.to_string(),
