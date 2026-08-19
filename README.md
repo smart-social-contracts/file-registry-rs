@@ -84,7 +84,7 @@ set_namespace_approval  {"namespace": "ext/foo/1.0.0",
                          "status": "approved" | "rejected",   # default approved
                          "notes":  "..."}
 get_namespace_approval  {"namespace": "ext/foo/1.0.0"}
-get_namespace_approval_icc(namespace)      # positional, for inter-canister calls
+get_namespace_approval_icc(namespace)      # update, positional, for inter-canister calls
 ```
 
 The read returns `approved`, `status`, `approver`, `decided_at`, `notes`,

@@ -150,7 +150,7 @@ fn get_namespace_approval(args: String) -> String {
     with_reg(|reg| api::q_get_namespace_approval(reg, &args))
 }
 
-#[query]
+#[update]
 fn get_namespace_approval_icc(namespace: String) -> String {
     with_reg(|reg| api::get_namespace_approval_impl(reg, &namespace))
 }
