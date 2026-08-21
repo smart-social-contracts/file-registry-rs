@@ -56,8 +56,6 @@ service : {
   list_codices : () -> (text) query;
   latest_version : (text) -> (text) query;
   get_extension_manifest : (text) -> (text) query;
-  get_namespace_approval : (text) -> (text) query;
-  get_namespace_approval_icc : (text) -> (text);
   get_backend_files : (text) -> (text) query;
   get_backend_files_icc : (text, text, text) -> (text) query;
   get_frontend_files : (text) -> (text) query;
@@ -70,7 +68,6 @@ service : {
   publish_namespace : (text) -> (text);
   delete_namespace : (text) -> (text);
   purge_old_versions : (text) -> (text);
-  set_namespace_approval : (text) -> (text);
   grant_publish : (text) -> (text);
   revoke_publish : (text) -> (text);
   store_file_chunk : (text) -> (text);

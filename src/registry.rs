@@ -14,13 +14,6 @@ pub const NS_PREFIX_CODEX: &str = "codex/";
 pub const NS_PREFIX_WASM: &str = "wasm";
 /// ACL key holding principals allowed to publish `kind: codex` packages.
 pub const CODEX_CURATORS_ACL_KEY: &str = "_codex_curators";
-/// ACL key holding principals allowed to record approvals (the marketplace
-/// canister in production). Deliberately separate from publisher rights:
-/// uploading a package must not let you approve it.
-pub const APPROVERS_ACL_KEY: &str = "_approvers";
-
-pub const APPROVAL_APPROVED: &str = "approved";
-pub const APPROVAL_REJECTED: &str = "rejected";
 
 /// Suffix -> content type, checked in order (first match wins), same table
 /// as the Python implementation.
@@ -64,22 +57,6 @@ pub struct FileMeta {
     pub updated: u64,
 }
 
-/// A reviewer's decision about one namespace, bound to the exact bytes that
-/// were reviewed. Approving a listing and then swapping the files would
-/// otherwise hand the approval to content nobody looked at.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Approval {
-    /// [`APPROVAL_APPROVED`] or [`APPROVAL_REJECTED`].
-    pub status: String,
-    /// Principal that recorded the decision; a realm decides whether it
-    /// trusts that principal.
-    pub approver: String,
-    pub decided_at: u64,
-    pub notes: String,
-    /// path -> sha256 as of the decision.
-    pub files: BTreeMap<String, String>,
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NamespaceInfo {
     pub created: u64,
@@ -87,12 +64,6 @@ pub struct NamespaceInfo {
     pub description: String,
     pub published: bool,
     pub published_at: Option<u64>,
-    /// Absent until a reviewer decides, and dropped again whenever the
-    /// namespace's content changes. Defaulted so namespaces written by an
-    /// earlier version deserialize as unapproved rather than failing the
-    /// post-upgrade read.
-    #[serde(default)]
-    pub approval: Option<Approval>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -130,7 +101,6 @@ impl Registry {
                     description: String::new(),
                     published: false,
                     published_at: None,
-                    approval: None,
                 },
             );
         }
@@ -140,48 +110,12 @@ impl Registry {
         self.files.get(namespace)
     }
 
-    /// Record file metadata, dropping any approval on the namespace.
-    ///
-    /// Invalidation lives here rather than in the callers so that every path
-    /// that can change a namespace's bytes — `store_file`, either finalize,
-    /// `admin_restore_files` — invalidates without having to remember to.
+    /// Record file metadata.
     pub fn set_file_meta(&mut self, namespace: &str, path: &str, meta: FileMeta) {
-        self.invalidate_approval(namespace);
         self.files
             .entry(namespace.to_string())
             .or_default()
             .insert(path.to_string(), meta);
-    }
-
-    /// Drop any approval on `namespace`. A no-op if there was none.
-    pub fn invalidate_approval(&mut self, namespace: &str) {
-        if let Some(info) = self.namespaces.get_mut(namespace) {
-            info.approval = None;
-        }
-    }
-
-    /// path -> sha256 for every file currently in the namespace.
-    pub fn file_hashes(&self, namespace: &str) -> BTreeMap<String, String> {
-        self.ns_files(namespace)
-            .map(|files| {
-                files
-                    .iter()
-                    .map(|(path, meta)| (path.clone(), meta.sha256.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Is the namespace approved *and* still holding the approved bytes?
-    pub fn is_approved(&self, namespace: &str) -> bool {
-        let Some(approval) = self
-            .namespaces
-            .get(namespace)
-            .and_then(|i| i.approval.as_ref())
-        else {
-            return false;
-        };
-        approval.status == APPROVAL_APPROVED && self.file_hashes(namespace) == approval.files
     }
 }
 
@@ -327,7 +261,6 @@ mod tests {
             description: String::new(),
             published,
             published_at: None,
-            approval: None,
         }
     }
 

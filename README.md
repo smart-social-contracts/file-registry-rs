@@ -69,43 +69,6 @@ deviations:
 - `http_request_update` is dropped: HTTP is served as certified queries, so
   no upgrade-to-update path exists anymore.
 
-Beyond the Python contract, this registry also stores **approvals** (below).
-Existing clients are unaffected: namespaces without one simply read back as
-unapproved, and `list_namespaces` gains an additive `approved` field.
-
-## Approvals
-
-A namespace can carry one reviewer decision, so a realm can refuse to install
-content the marketplace has not approved. The registry stores the decision and
-answers questions about it; it does not decide anything itself.
-
-```
-set_namespace_approval  {"namespace": "ext/foo/1.0.0",
-                         "status": "approved" | "rejected",   # default approved
-                         "notes":  "..."}
-get_namespace_approval  {"namespace": "ext/foo/1.0.0"}
-get_namespace_approval_icc(namespace)      # update, positional, for inter-canister calls
-```
-
-The read returns `approved`, `status`, `approver`, `decided_at`, `notes`,
-`content_matches` and `file_count`; an unapproved namespace reads back as
-`{"approved": false, "status": "unapproved"}`.
-
-Two properties make the decision meaningful:
-
-- **Approving is a separate right from publishing.** It needs the controller
-  or a principal on the `_approvers` ACL, granted with
-  `grant_publish {"namespace": "_approvers", "principal": "..."}`. Owning a
-  namespace does not let you approve your own package.
-- **An approval names the exact bytes reviewed.** It records the namespace's
-  `path -> sha256` map, and *any* change to the namespace's content drops it —
-  `store_file`, either finalize, `admin_restore_files`, `delete_file`. So
-  approve-then-swap yields an unapproved namespace rather than approved
-  malware. `content_matches` re-checks the hashes on every read, so a realm can
-  verify the binding instead of trusting it.
-
-Re-approval after a legitimate change is just another `set_namespace_approval`.
-
 ## Build
 
 Requires Rust (`wasm32-unknown-unknown` target) and `ic-wasm`.

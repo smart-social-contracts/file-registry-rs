@@ -7,8 +7,8 @@
 
 use crate::registry::{
     find_latest_version, guess_content_type, parse_semver, pending_key, resolve_version_spec,
-    Approval, FileMeta, PendingUpload, Registry, APPROVAL_APPROVED, APPROVAL_REJECTED,
-    APPROVERS_ACL_KEY, CODEX_CURATORS_ACL_KEY, NS_PREFIX_CODEX, NS_PREFIX_EXT, NS_PREFIX_WASM,
+    FileMeta, PendingUpload, Registry, CODEX_CURATORS_ACL_KEY, NS_PREFIX_CODEX, NS_PREFIX_EXT,
+    NS_PREFIX_WASM,
 };
 use crate::store::{asset_key, BlobStore};
 use base64::Engine;
@@ -102,26 +102,6 @@ fn require_codex_curator(reg: &Registry, ctx: &CallerCtx) -> Option<String> {
     ))
 }
 
-/// Controller, or a principal on the `_approvers` ACL (the marketplace
-/// canister in production). Granted with the usual
-/// `grant_publish {"namespace": "_approvers", ...}`.
-fn require_approver(reg: &Registry, ctx: &CallerCtx) -> Option<String> {
-    if ctx.is_controller {
-        return None;
-    }
-    if reg
-        .acl
-        .get(APPROVERS_ACL_KEY)
-        .map(|l| l.iter().any(|p| p == &ctx.caller))
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    Some(err(
-        "Unauthorized: recording an approval requires approver rights on this registry",
-    ))
-}
-
 /// Reject uncurated uploads that claim the privileged codex classification:
 /// any manifest.json declaring `"kind": "codex"`, and all writes under the
 /// legacy `codex/` namespace.
@@ -164,7 +144,6 @@ pub fn list_namespaces_json(reg: &Registry) -> String {
             "created": ns_info.created,
             "owner": ns_info.owner,
             "description": ns_info.description,
-            "approved": reg.is_approved(ns_name),
         }));
     }
     // BTreeMap iteration is already sorted by namespace.
@@ -804,7 +783,6 @@ pub fn u_delete_file(
     if !existed {
         return err(format!("Not found: {namespace}/{path}"));
     }
-    reg.invalidate_approval(&namespace);
     store.remove(&asset_key(&namespace, &path));
     refresh_indexes(reg, store, Some(&namespace));
     json!({"ok": true, "namespace": namespace, "path": path}).to_string()
@@ -948,118 +926,6 @@ pub fn u_revoke_publish(reg: &mut Registry, ctx: &CallerCtx, args: &str) -> Stri
         ns_acl.retain(|p| p != &principal);
     }
     json!({"ok": true, "namespace": namespace, "principal": principal}).to_string()
-}
-
-// ---------------------------------------------------------------------------
-// Approval
-// ---------------------------------------------------------------------------
-
-/// Record a reviewer's decision about a namespace, capturing the hashes of
-/// the files as they stand now. Any later write to the namespace clears it.
-pub fn u_set_namespace_approval(
-    reg: &mut Registry,
-    store: &mut dyn BlobStore,
-    ctx: &CallerCtx,
-    args: &str,
-) -> String {
-    let params = match parse_args(args) {
-        Ok(p) => p,
-        Err(e) => return err(e),
-    };
-    let namespace = match str_field(&params, "namespace") {
-        Ok(v) => v.to_string(),
-        Err(e) => return err(e),
-    };
-    let status = params
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or(APPROVAL_APPROVED)
-        .to_string();
-    let notes = params
-        .get("notes")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    if let Some(e) = require_approver(reg, ctx) {
-        return e;
-    }
-    if status != APPROVAL_APPROVED && status != APPROVAL_REJECTED {
-        return err(format!(
-            "status must be '{APPROVAL_APPROVED}' or '{APPROVAL_REJECTED}', got '{status}'"
-        ));
-    }
-    if !reg.namespaces.contains_key(&namespace) {
-        return err(format!("Namespace '{namespace}' not found"));
-    }
-
-    let files = reg.file_hashes(&namespace);
-    if status == APPROVAL_APPROVED && files.is_empty() {
-        return err(format!("Namespace '{namespace}' has no files to approve"));
-    }
-    let file_count = files.len();
-
-    // Unwrap is safe: existence checked above, and nothing between removes it.
-    reg.namespaces.get_mut(&namespace).unwrap().approval = Some(Approval {
-        status: status.clone(),
-        approver: ctx.caller.clone(),
-        decided_at: ctx.now,
-        notes,
-        files,
-    });
-    refresh_indexes(reg, store, Some(&namespace));
-
-    json!({
-        "ok": true,
-        "namespace": namespace,
-        "status": status,
-        "approver": ctx.caller,
-        "decided_at": ctx.now,
-        "file_count": file_count,
-    })
-    .to_string()
-}
-
-pub fn get_namespace_approval_impl(reg: &Registry, namespace: &str) -> String {
-    let Some(info) = reg.namespaces.get(namespace) else {
-        return err(format!("Namespace '{namespace}' not found"));
-    };
-    let Some(approval) = &info.approval else {
-        return json!({
-            "namespace": namespace,
-            "approved": false,
-            "status": "unapproved",
-        })
-        .to_string();
-    };
-
-    // Approvals are dropped whenever content changes, so this should always
-    // hold. Reporting it anyway lets a realm verify the binding rather than
-    // take the registry's word for it.
-    let content_matches = reg.file_hashes(namespace) == approval.files;
-
-    json!({
-        "namespace": namespace,
-        "approved": approval.status == APPROVAL_APPROVED && content_matches,
-        "status": approval.status,
-        "approver": approval.approver,
-        "decided_at": approval.decided_at,
-        "notes": approval.notes,
-        "content_matches": content_matches,
-        "file_count": approval.files.len(),
-    })
-    .to_string()
-}
-
-pub fn q_get_namespace_approval(reg: &Registry, args: &str) -> String {
-    let params = match parse_args(args) {
-        Ok(p) => p,
-        Err(e) => return err(e),
-    };
-    match str_field(&params, "namespace") {
-        Ok(ns) => get_namespace_approval_impl(reg, ns),
-        Err(e) => err(e),
-    }
 }
 
 // ---------------------------------------------------------------------------
