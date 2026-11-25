@@ -69,6 +69,23 @@ deviations:
 - `http_request_update` is dropped: HTTP is served as certified queries, so
   no upgrade-to-update path exists anymore.
 
+## Who may write
+
+Controllers write anywhere. A namespace's publishers (`grant_publish`,
+`revoke_publish`, controller only) write and delete in it. By default the
+first caller to write to a namespace with no publishers becomes its
+publisher, as in the Python registry, so anyone can create a namespace.
+
+A registry that serves one application can close that door:
+
+```bash
+dfx canister call file_registry set_namespace_policy '("{\"open\": false}")'
+```
+
+Then nobody is auto-granted, and only principals a controller granted can
+write. `get_stats` reports the policy as `open_namespaces`. `{"open": true}`
+restores the default.
+
 ## Build
 
 Requires Rust (`wasm32-unknown-unknown` target) and `ic-wasm`.
