@@ -251,7 +251,11 @@ fn empty_wasm_rejected() {
     let mut store = MemStore::default();
     let ctx = user("alice");
 
-    for path in ["realm-base-1.0.0.wasm", "realm-base-1.0.0.WASM", "pkg/module.Wasm"] {
+    for path in [
+        "realm-base-1.0.0.wasm",
+        "realm-base-1.0.0.WASM",
+        "pkg/module.Wasm",
+    ] {
         let res = store_small(&mut reg, &mut store, &ctx, "wasm", path, b"");
         assert_eq!(res["error"], "empty wasm not allowed", "path={path}");
     }
@@ -820,4 +824,120 @@ fn update_namespace_description() {
         &json!({"namespace": "nope"}).to_string(),
     ));
     assert!(res["error"].as_str().unwrap().contains("not found"));
+}
+
+#[test]
+fn closed_registry_only_lets_granted_publishers_write() {
+    let mut reg = Registry::default();
+    let mut store = MemStore::default();
+    let policy = |reg: &mut Registry, ctx: &CallerCtx, open: bool| {
+        v(&u_set_namespace_policy(
+            reg,
+            ctx,
+            &json!({"open": open}).to_string(),
+        ))
+    };
+
+    // Open by default, and only a controller changes that.
+    assert_eq!(v(&q_get_stats(&reg))["open_namespaces"], true);
+    let refused = policy(&mut reg, &user("mallory"), false);
+    assert!(refused["error"].as_str().unwrap().contains("controller"));
+    assert_eq!(policy(&mut reg, &controller(), false)["ok"], true);
+    assert_eq!(v(&q_get_stats(&reg))["open_namespaces"], false);
+
+    // Nobody claims a namespace by writing to it first, by any write path.
+    let res = store_small(
+        &mut reg,
+        &mut store,
+        &user("mallory"),
+        "spam",
+        "a.bin",
+        b"x",
+    );
+    assert!(res["error"].as_str().unwrap().contains("Unauthorized"));
+    let chunk = json!({"namespace": "spam", "path": "b.bin", "chunk_index": 0,
+                       "total_chunks": 1, "data_b64": b64(b"x")})
+    .to_string();
+    let res = v(&u_store_file_chunk(&mut reg, &user("mallory"), &chunk));
+    assert!(res["error"].as_str().unwrap().contains("Unauthorized"));
+    assert!(!reg.acl.contains_key("spam"));
+    assert!(!reg.namespaces.contains_key("spam"));
+    assert!(reg.pending.is_empty());
+
+    // A principal a controller granted writes and deletes; others still cannot.
+    v(&u_grant_publish(
+        &mut reg,
+        &controller(),
+        &json!({"namespace": "images", "principal": "forum"}).to_string(),
+    ));
+    let res = store_small(
+        &mut reg,
+        &mut store,
+        &user("forum"),
+        "images",
+        "1.png",
+        b"png",
+    );
+    assert_eq!(res["ok"], true);
+    let res = store_small(
+        &mut reg,
+        &mut store,
+        &user("mallory"),
+        "images",
+        "2.png",
+        b"png",
+    );
+    assert!(res["error"].as_str().unwrap().contains("Unauthorized"));
+    let gone = json!({"namespace": "images", "path": "1.png"}).to_string();
+    assert!(v(&u_delete_file(
+        &mut reg,
+        &mut store,
+        &user("mallory"),
+        &gone
+    ))["error"]
+        .is_string());
+    assert_eq!(
+        v(&u_delete_file(&mut reg, &mut store, &user("forum"), &gone))["ok"],
+        true
+    );
+    assert!(store.read("/images/1.png").is_none());
+
+    // Controllers still write anywhere.
+    let res = store_small(&mut reg, &mut store, &controller(), "wasm", "x.txt", b"hi");
+    assert_eq!(res["ok"], true);
+
+    // Reopening restores the first-writer auto-grant.
+    policy(&mut reg, &controller(), true);
+    let res = store_small(
+        &mut reg,
+        &mut store,
+        &user("alice"),
+        "ext/new/1.0.0",
+        "a.py",
+        b"x",
+    );
+    assert_eq!(res["ok"], true);
+}
+
+#[test]
+fn state_saved_before_the_policy_existed_reads_as_open() {
+    // A Registry as the previous build serialized it to stable memory: no
+    // closed_namespaces field.
+    #[derive(serde::Serialize)]
+    struct OldRegistry {
+        namespaces: std::collections::BTreeMap<String, ()>,
+        files: std::collections::BTreeMap<String, ()>,
+        acl: std::collections::BTreeMap<String, Vec<String>>,
+        pending: std::collections::BTreeMap<String, ()>,
+    }
+    let old = OldRegistry {
+        namespaces: Default::default(),
+        files: Default::default(),
+        acl: [("ext/a".to_string(), vec!["alice".to_string()])].into(),
+        pending: Default::default(),
+    };
+    let bytes = serde_cbor::to_vec(&old).unwrap();
+    let reg: Registry = serde_cbor::from_slice(&bytes).unwrap();
+    assert!(!reg.closed_namespaces);
+    assert_eq!(reg.acl["ext/a"], vec!["alice".to_string()]);
 }

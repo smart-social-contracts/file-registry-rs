@@ -84,6 +84,12 @@ pub struct Registry {
     pub acl: BTreeMap<String, Vec<String>>,
     /// "{namespace}\n{path}" -> staged chunked upload
     pub pending: BTreeMap<String, PendingUpload>,
+    /// When set, a namespace with no publishers is closed to non-controllers:
+    /// nobody is auto-granted, so only principals a controller granted can
+    /// write. Off by default (the Python registry's behaviour); absent from
+    /// state written before it existed, which reads as off.
+    #[serde(default)]
+    pub closed_namespaces: bool,
 }
 
 pub fn pending_key(namespace: &str, path: &str) -> String {

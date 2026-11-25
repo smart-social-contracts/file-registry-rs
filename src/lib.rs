@@ -221,6 +221,11 @@ fn grant_publish(args: String) -> String {
 }
 
 #[update]
+fn set_namespace_policy(args: String) -> String {
+    with_reg_mut(|reg| api::u_set_namespace_policy(reg, &ctx(), &args))
+}
+
+#[update]
 fn revoke_publish(args: String) -> String {
     with_reg_mut(|reg| api::u_revoke_publish(reg, &ctx(), &args))
 }

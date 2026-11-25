@@ -65,16 +65,27 @@ fn require_controller(ctx: &CallerCtx) -> Option<String> {
     None
 }
 
-/// Controller or namespace publisher; first caller to an ACL-less namespace
-/// is auto-granted (same as the Python registry).
+/// Controller or namespace publisher. On an open registry (the default) the
+/// first caller to an ACL-less namespace is auto-granted, as in the Python
+/// registry; on a closed one nobody is.
 fn require_publisher(reg: &mut Registry, ctx: &CallerCtx, namespace: &str) -> Option<String> {
     if ctx.is_controller {
         return None;
     }
-    let ns_acl = reg.acl.entry(namespace.to_string()).or_default();
-    if ns_acl.iter().any(|p| p == &ctx.caller) {
+    if reg
+        .acl
+        .get(namespace)
+        .is_some_and(|l| l.iter().any(|p| p == &ctx.caller))
+    {
         return None;
     }
+    if reg.closed_namespaces {
+        return Some(err(format!(
+            "Unauthorized: not a publisher for namespace '{namespace}' \
+             (only a controller grants publishers on this registry)"
+        )));
+    }
+    let ns_acl = reg.acl.entry(namespace.to_string()).or_default();
     if ns_acl.is_empty() {
         ns_acl.push(ctx.caller.clone());
         return None;
@@ -195,6 +206,7 @@ pub fn q_get_stats(reg: &Registry) -> String {
         "namespaces": reg.namespaces.len(),
         "total_files": total_files,
         "total_bytes": total_bytes,
+        "open_namespaces": !reg.closed_namespaces,
     })
     .to_string()
 }
@@ -904,6 +916,24 @@ pub fn u_grant_publish(reg: &mut Registry, ctx: &CallerCtx, args: &str) -> Strin
         ns_acl.push(principal.clone());
     }
     json!({"ok": true, "namespace": namespace, "principal": principal}).to_string()
+}
+
+/// Controller only: `{"open": false}` stops auto-granting ACL-less namespaces,
+/// so only principals a controller granted can write; `{"open": true}`
+/// restores the default.
+pub fn u_set_namespace_policy(reg: &mut Registry, ctx: &CallerCtx, args: &str) -> String {
+    if let Some(e) = require_controller(ctx) {
+        return e;
+    }
+    let params = match parse_args(args) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    let Some(open) = params.get("open").and_then(|v| v.as_bool()) else {
+        return err("Missing required field: open (true or false)");
+    };
+    reg.closed_namespaces = !open;
+    json!({"ok": true, "open": open}).to_string()
 }
 
 pub fn u_revoke_publish(reg: &mut Registry, ctx: &CallerCtx, args: &str) -> String {
