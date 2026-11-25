@@ -1,6 +1,6 @@
 # file-registry-rs
 
-Cycle-efficient on-chain file registry for [Realms](https://github.com/smart-social-contracts/realms),
+Cycle-efficient on-chain file registry,
 written in Rust on top of [ic-certified-assets](https://github.com/smart-social-contracts/certified-assets).
 A drop-in replacement for the Python `file_registry` canister: same Candid
 interface, same JSON contracts, a small fraction of the cycle cost.
