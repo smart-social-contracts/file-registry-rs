@@ -2,7 +2,7 @@
 name = "file_registry"
 version = "0.1.0"
 edition = "2021"
-description = "Cycle-efficient file registry canister for Realms, built on ic-certified-assets. Drop-in replacement for the Python file_registry."
+description = "Cycle-efficient file registry canister, built on ic-certified-assets. Drop-in replacement for the Python file_registry."
 repository = "https://github.com/smart-social-contracts/file-registry-rs"
 license = "Apache-2.0"
 publish = false
